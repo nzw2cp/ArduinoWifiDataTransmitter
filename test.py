@@ -55,6 +55,14 @@ os.makedirs("./Data", exist_ok=True)
 async def handler(reader, writer):
     peer = writer.get_extra_info("peername")
     print(f"[server] Connection from {peer}")
+    # send current epoch ms to client immediately after connect
+    try:
+        now_ms = int(time.time() * 1000)
+        writer.write(f"{now_ms}\n".encode("utf-8"))
+        await writer.drain()
+        print(f"[server] Sent server time {now_ms} to {peer}")
+    except Exception as e:
+        print(f"[server] Failed to send server time to {peer}: {e}")
     try:
         # read multiple messages per connection; each message is terminated by a blank line
         while True:
@@ -280,7 +288,7 @@ class DeviceMonitorGUI:
         self.ax.set_ylabel("norm(x,y,z)")
         if times and norms:
             latest = times[-1]
-            cutoff = latest - 5.0
+            cutoff = latest - 5.0e3
             # find first index where time >= cutoff
             start_idx = 0
             while start_idx < len(times) and times[start_idx] < cutoff:

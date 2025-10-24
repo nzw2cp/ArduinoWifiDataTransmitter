@@ -28,7 +28,28 @@ unsigned long blinkLastMillis = 0;
 bool blinkState = false;
 unsigned long sendPulseEnd = 0;
 
-unsigned long startMillis = 0; // new: record sketch start time
+unsigned long long startMillis = 0; // epoch ms from server (0 until synced)
+unsigned long syncLocalMillis = 0;
+
+// helper: convert unsigned long long to decimal string (returns length, 0 on failure)
+size_t ull_to_decstr(unsigned long long v, char* buf, size_t bufsize) {
+  if (bufsize == 0) return 0;
+  if (v == 0) {
+    if (bufsize > 1) { buf[0] = '0'; buf[1] = '\0'; return 1; }
+    buf[0] = '\0'; return 0;
+  }
+  char tmp[32];
+  int pos = 0;
+  while (v > 0 && pos < (int)(sizeof(tmp) - 1)) {
+    tmp[pos++] = '0' + (v % 10);
+    v /= 10;
+  }
+  size_t len = (size_t)pos;
+  if (len + 1 > bufsize) return 0; // not enough space
+  for (size_t i = 0; i < len; ++i) buf[i] = tmp[len - 1 - i];
+  buf[len] = '\0';
+  return len;
+}
 
 // New tuning / debug flags
 constexpr bool DEBUG = false;          // set true to enable occasional Serial logs
@@ -90,6 +111,44 @@ bool ensureTCPConnected() {
     return false;
   }
   Serial.println("[arduino] TCP connected");
+
+  // Attempt to read initial epoch ms sent by server (short blocking window)
+  {
+    unsigned long start = millis();
+    char linebuf[64];
+    size_t pos = 0;
+    const unsigned long timeoutMs = 2000UL;
+    while (millis() - start < timeoutMs) {
+      while (client && client.available()) {
+        int c = client.read();
+        if (c < 0) break;
+        if (c == '\r') continue;
+        if (c == '\n') {
+          linebuf[pos] = '\0';
+          if (pos > 0) {
+            // try parse numeric epoch ms
+            unsigned long long val = (unsigned long long)atoll(linebuf);
+            if (val > 1000) { // sanity check
+              startMillis = val;
+              syncLocalMillis = millis();
+              if (DEBUG) {
+                Serial.print("[arduino] Synced startMillis=");
+                Serial.println((unsigned long long)startMillis);
+              }
+              return true;
+            }
+          }
+          pos = 0;
+        } else {
+          if (pos < sizeof(linebuf) - 1) linebuf[pos++] = (char)c;
+        }
+      }
+      // small yield to let other processing occur
+      yield();
+    }
+    // if we didn't parse a time here, we'll accept it later in non-blocking receive loop
+  }
+
   return true;
 }
 
@@ -135,7 +194,9 @@ void setup() {
   digitalWrite(STATUS_LED, LOW);
   Serial.begin(115200);
   randomSeed(analogRead(0));
-  startMillis = millis(); // start time reference
+  // do NOT set startMillis here; it'll be set by server on first connect.
+  // record a local reference time so we don't divide by zero if needed
+  syncLocalMillis = millis();
 
   // initialize payload buffer to empty
   payloadPos = 0;
@@ -169,8 +230,15 @@ void loop() {
   // sample IMU when data is available
   if (IMU.accelerationAvailable()) {
     IMU.readAcceleration(x, y, z);
-    float t = (millis() - startMillis) / 1000.0f; // seconds since start
+    // compute epoch ms: if startMillis==0 (not yet synced) fall back to local millis()
+    unsigned long long nowEpochMs;
+    if (startMillis != 0) {
+      nowEpochMs = startMillis + (unsigned long long)(millis() - syncLocalMillis);
+    } else {
+      nowEpochMs = (unsigned long long)millis();
+    }
 
+    // use ms since epoch as first CSV field
     // if payload empty, write header (device name + newline)
     if (payloadPos == 0) {
       int hlen = snprintf(payloadBuf, PAYLOAD_BUF_SIZE, "%s\n", DEVICE_NAME);
@@ -207,8 +275,13 @@ void loop() {
       }
     }
 
-    // write formatted line into buffer
-    int wrote = snprintf(payloadBuf + payloadPos, rem + 1, "%.3f,%.2f,%.2f,%.2f\n", t, x, y, z);
+    // write formatted line into buffer: epoch_ms (converted to string) + floats
+    char epochStr[32];
+    if (ull_to_decstr(nowEpochMs, epochStr, sizeof(epochStr)) == 0) {
+      // conversion failed; fallback to "0"
+      epochStr[0] = '0'; epochStr[1] = '\0';
+    }
+    int wrote = snprintf(payloadBuf + payloadPos, rem + 1, "%s,%.2f,%.2f,%.2f\n", epochStr, x, y, z);
     if (wrote < 0) {
       // formatting error; drop sample
     } else if (wrote > rem) {
@@ -240,7 +313,11 @@ void loop() {
       payloadPos = (size_t)hlen2;
       // try append again (assume it fits now)
       int rem2 = (int)(PAYLOAD_BUF_SIZE - payloadPos - 1);
-      int wrote2 = snprintf(payloadBuf + payloadPos, rem2 + 1, "%.3f,%.2f,%.2f,%.2f\n", t, x, y, z);
+      char epochStr2[32];
+      if (ull_to_decstr(nowEpochMs, epochStr2, sizeof(epochStr2)) == 0) {
+        epochStr2[0] = '0'; epochStr2[1] = '\0';
+      }
+      int wrote2 = snprintf(payloadBuf + payloadPos, rem2 + 1, "%s,%.2f,%.2f,%.2f\n", epochStr2, x, y, z);
       if (wrote2 > 0 && wrote2 <= rem2) {
         payloadPos += (size_t)wrote2;
         samplesCollected = 1;
@@ -275,6 +352,25 @@ void loop() {
         if (DEBUG) {
           Serial.print("[arduino] Received line: ");
           Serial.println(line);
+        }
+      }
+      // If we haven't synced startMillis yet, accept a numeric line as epoch ms
+      if (startMillis == 0 && line.length() > 0) {
+        bool allDigits = true;
+        for (size_t i = 0; i < line.length(); ++i) {
+          char ch = line.charAt(i);
+          if (!(ch >= '0' && ch <= '9')) { allDigits = false; break; }
+        }
+        if (allDigits) {
+          unsigned long long val = (unsigned long long)atoll(line.c_str());
+          if (val > 1000) {
+            startMillis = val;
+            syncLocalMillis = millis();
+            if (DEBUG) {
+              Serial.print("[arduino] Synced startMillis=");
+              Serial.println((unsigned long long)startMillis);
+            }
+          }
         }
       }
       if (line.length() > 0 && ackPending && line.startsWith("ACK")) {

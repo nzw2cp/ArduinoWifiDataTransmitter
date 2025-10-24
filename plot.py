@@ -84,6 +84,9 @@ print(f'std: {conts.std()}')
 # print(f'cor: {conts.corr()}')
 
 plt.plot(df1['TS'])
+df2 = pd.read_csv('./Data/Device2.csv')
+plt.plot(df2['TS'])
+
     
 plt.tight_layout()
 plt.show()

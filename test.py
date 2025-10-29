@@ -49,6 +49,10 @@ MAX_SERIES_LEN = 5000
 # notification queue for GUI updates (device names)
 notify_queue = queue.Queue()
 
+# new: save filename prefix and lock
+save_prefix = ""
+save_prefix_lock = threading.Lock()
+
 # ensure Data directory exists
 os.makedirs("./Data", exist_ok=True)
 
@@ -123,8 +127,10 @@ async def handler(reader, writer):
             except Exception:
                 pass
 
-            # persist CSV rows to ./Data/{device_name}.csv
-            device_path = Path(f"./Data/{device_name}.csv")
+            # persist CSV rows to ./Data/{prefix}{device_name}.csv
+            with save_prefix_lock:
+                prefix = save_prefix
+            device_path = Path(f"./Data/{prefix}_{device_name}.csv")
             mode = "a" if device_path.exists() else "w"
             with device_path.open(mode, newline="") as csvfile:
                 writer_csv = csv.writer(csvfile)
@@ -173,6 +179,29 @@ class DeviceMonitorGUI:
         frm = ttk.Frame(root)
         frm.pack(side=tk.LEFT, fill=tk.Y, padx=6, pady=6)
 
+        # New: save prefix label + entry above device list
+        self.save_prefix_var = tk.StringVar()
+        # initialize from global save_prefix
+        with save_prefix_lock:
+            self.save_prefix_var.set(save_prefix)
+        prefix_frame = ttk.Frame(frm)
+        prefix_frame.pack(fill=tk.X, pady=(0,6))
+        ttk.Label(prefix_frame, text="Save file prefix:").pack(side=tk.LEFT)
+        self.prefix_entry = ttk.Entry(prefix_frame, textvariable=self.save_prefix_var, width=48)
+        self.prefix_entry.pack(side=tk.LEFT, padx=(6,0))
+        # update global prefix when entry changes
+        def _on_prefix_change(*args):
+            val = self.save_prefix_var.get()
+            with save_prefix_lock:
+                global save_prefix
+                save_prefix = val
+        self.save_prefix_var.trace_add("write", _on_prefix_change)
+
+        # New: status label for visual feedback when Enter pressed
+        self.status_label = ttk.Label(frm, text="", foreground="green")
+        self.status_label.pack(fill=tk.X, pady=(4,6))
+        self._status_after_id = None
+
         # Add device name column
         self.tree = ttk.Treeview(frm, columns=("device", "last_ms", "rows"), show="headings", height=20)
         self.tree.heading("device", text="Device")
@@ -204,6 +233,10 @@ class DeviceMonitorGUI:
         self.notification_poll_ms = 100   # poll notify_queue this often
         self._schedule_update()
         self._schedule_notification_poll()
+
+        # bind Enter key to mark a split
+        # allow Enter from anywhere in the window
+        self.root.bind("<Return>", self.on_enter)
 
     def _schedule_update(self):
         self.root.after(self.update_interval_ms, self._update)
@@ -319,6 +352,47 @@ class DeviceMonitorGUI:
             self._update_plot_for_selected()
         else:
             self.selected = None
+
+    # new: handle Enter key to append split row
+    def on_enter(self, event=None):
+        """
+        Append a row to ./Data/splits.csv with columns: prefix,time_ms
+        Uses current save_prefix under lock. Shows visual feedback.
+        """
+        with save_prefix_lock:
+            prefix = save_prefix
+        ts = int(time.time() * 1000)
+        splits_path = Path("./Data/splits.csv")
+        write_header = not splits_path.exists()
+        try:
+            with splits_path.open("a", newline="") as f:
+                writer_csv = csv.writer(f)
+                if write_header:
+                    writer_csv.writerow(["prefix", "time_ms"])
+                writer_csv.writerow([prefix, ts])
+            # show visual feedback
+            self._show_status(f"Saved split: {prefix} @ {ts}")
+        except Exception as e:
+            # fail quietly; optionally print for debugging and show error
+            print(f"[server] Failed to write split: {e}")
+            self._show_status("Failed to save split", error=True)
+
+    # new helper: show temporary status message (clears after ttl_ms)
+    def _show_status(self, text: str, ttl_ms: int = 1500, error: bool = False):
+        # cancel previous clear if any
+        if getattr(self, "_status_after_id", None):
+            try:
+                self.root.after_cancel(self._status_after_id)
+            except Exception:
+                pass
+            self._status_after_id = None
+        # set text and color
+        self.status_label.config(text=text, foreground=("red" if error else "green"))
+        # schedule clear
+        def _clear():
+            self.status_label.config(text="")
+            self._status_after_id = None
+        self._status_after_id = self.root.after(ttl_ms, _clear)
 
 def start_server_in_thread():
     t = threading.Thread(target=lambda: asyncio.run(main_server()), daemon=True)

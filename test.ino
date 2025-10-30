@@ -64,7 +64,7 @@ size_t ull_to_decstr(unsigned long long v, char* buf, size_t bufsize) {
 
 // New tuning / debug flags
 constexpr bool DEBUG = false;          // set true to enable occasional Serial logs
-constexpr int CHUNK_SIZE = 100;        // samples per packet (keep same as before)
+constexpr int CHUNK_SIZE = 45;        // samples per packet (keep same as before)
 
 // Replace sample buffer with a payload buffer (approx size = CHUNK_SIZE * avg_line_len + header)
 constexpr size_t PAYLOAD_BUF_SIZE = 4096;

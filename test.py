@@ -35,8 +35,8 @@ def parse_payload(message: str) -> Tuple[str, List[List[float]]]:
         if len(parts) < 4:
             continue
         try:
-            # parse first four values: time, x, y, z
-            rows.append([float(parts[0]), float(parts[1]), float(parts[2]), float(parts[3])])
+            # parse values
+            rows.append([float(p) for p in parts])
         except ValueError:
             continue
     return device_name, rows

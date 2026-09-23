@@ -2,13 +2,14 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
-df1 = pd.read_csv('./Data/Device1.csv')
+# df1 = pd.read_csv('./Data/Testing_Device1.csv')
+df1 = pd.read_csv('./Data/Device3.csv')
 # df1 = pandas.read_csv('./Data/Device1.csv', names=['x','y','z'])
 # df2 = pandas.read_csv('./Data/Device2.csv', names=['x','y','z'])
 
 print(df1.head())
 
-if len(df1['x']) == 0:
+if len(df1['TS']) == 0:
     print("test.csv is empty.")
     exit()
 
@@ -70,7 +71,8 @@ if len(df1['x']) == 0:
 
 conts = list()
 
-for n in range(len(df1['TS'])-1):
+# for n in range(6000, len(df1['TS'])-1):
+for n in range(9000):
     conts.append(df1['TS'][n+1] - df1['TS'][n])
 
 conts = pd.DataFrame(conts)
@@ -84,8 +86,9 @@ print(f'std: {conts.std()}')
 # print(f'cor: {conts.corr()}')
 
 plt.plot(df1['TS'])
-df2 = pd.read_csv('./Data/Device2.csv')
-plt.plot(df2['TS'])
+plt.grid()
+# df2 = pd.read_csv('./Data/Device2.csv')
+# plt.plot(df2['TS'])
 
     
 plt.tight_layout()

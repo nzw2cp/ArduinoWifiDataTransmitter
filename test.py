@@ -306,43 +306,53 @@ class DeviceMonitorGUI:
 
     def _update_plot_for_selected(self):
         # Grab data for the selected device and redraw plot
-        with devices_lock:
-            if self.selected and self.selected in devices:
-                dev = devices[self.selected]
-                times = list(dev['times'])
-                norms = list(dev['norms'])
-            else:
-                times = []
-                norms = []
+        try:
+            with devices_lock:
+                if self.selected and self.selected in devices:
+                    dev = devices[self.selected]
+                    times = list(dev['times'])
+                    norms = list(dev['norms'])
+                else:
+                    times = []
+                    norms = []
 
-        # redraw plot (show only last 5 seconds)
-        self.ax.clear()
-        self.ax.set_xlabel("time (s)")
-        self.ax.set_ylabel("norm(x,y,z)")
-        if times and norms:
-            latest = times[-1]
-            cutoff = latest - 5.0e3
-            # find first index where time >= cutoff
-            start_idx = 0
-            while start_idx < len(times) and times[start_idx] < cutoff:
-                start_idx += 1
-            plot_times = times[start_idx:]
-            plot_norms = norms[start_idx:]
-            if plot_times and plot_norms:
-                self.ax.plot(plot_times, plot_norms, "-b")
-                # set x limits to the 5s window (or a small margin if fewer samples)
-                left = cutoff if plot_times[0] <= cutoff else plot_times[0]
-                right = latest
-                self.ax.set_xlim(left, right)
-                self.ax.set_ylim(0)
-                self.ax.relim()
-                self.ax.autoscale_view()
-                self.ax.grid(True)
+            # redraw plot (show only last 5 seconds)
+            self.ax.clear()
+            self.ax.set_xlabel("time (s)")
+            self.ax.set_ylabel("norm(x,y,z)")
+            if times and norms:
+                latest = times[-1]
+                cutoff = latest - 5.0e3
+                # find first index where time >= cutoff
+                start_idx = len(times)-1
+                while start_idx > 0 and times[start_idx] > cutoff:
+                    start_idx -= 1
+                plot_times = times[start_idx:]
+                plot_norms = norms[start_idx:]
+                if plot_times and plot_norms:
+                    self.ax.plot(plot_times, plot_norms, "-b")
+                    # set x limits to the 5s window (or a small margin if fewer samples)
+                    left = cutoff if plot_times[0] <= cutoff else plot_times[0]
+                    right = latest
+                    self.ax.set_xlim(left, right)
+                    self.ax.set_ylim(0)
+                    self.ax.relim()
+                    self.ax.autoscale_view()
+                    self.ax.grid(True)
+                else:
+                    self.ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=self.ax.transAxes)
             else:
                 self.ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=self.ax.transAxes)
-        else:
-            self.ax.text(0.5, 0.5, "No data", ha="center", va="center", transform=self.ax.transAxes)
-        self.canvas.draw()
+            self.canvas.draw()
+        except Exception as e:
+            # Don't allow plotting errors to kill the Tk mainloop; log and continue.
+            print(f"[gui] Plot update error: {e}")
+            try:
+                self.ax.clear()
+                self.ax.text(0.5, 0.5, "Error", ha="center", va="center", transform=self.ax.transAxes)
+                self.canvas.draw()
+            except Exception:
+                pass
 
     def on_select(self, event):
         sel = self.tree.selection()
